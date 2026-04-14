@@ -1,0 +1,57 @@
+steps:
+  # ─── Step 1: Run backend unit tests ─────────────────────────────────────────
+  - name: 'python:3.11'
+    id: 'test'
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        pip install -r backend/requirements.txt pytest pytest-asyncio --quiet
+        pytest backend/tests/ -v
+
+  # ─── Step 2: Build Docker image ─────────────────────────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build'
+    waitFor: ['test']
+    args:
+      - build
+      - -t
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/ai-reviewer/api:$SHORT_SHA'
+      - -t
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/ai-reviewer/api:latest'
+      - .
+
+  # ─── Step 3: Push to Artifact Registry ──────────────────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push'
+    waitFor: ['build']
+    args:
+      - push
+      - '--all-tags'
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/ai-reviewer/api'
+
+  # ─── Step 4: Deploy to Cloud Run ────────────────────────────────────────────
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'deploy'
+    waitFor: ['push']
+    args:
+      - run
+      - deploy
+      - ai-code-reviewer
+      - '--image=$_REGION-docker.pkg.dev/$PROJECT_ID/ai-reviewer/api:$SHORT_SHA'
+      - '--region=$_REGION'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--port=8080'
+      - '--memory=2Gi'
+      - '--cpu=2'
+      - '--min-instances=0'
+      - '--max-instances=10'
+      - '--set-secrets=GITHUB_TOKEN=github-token:latest,GITHUB_WEBHOOK_SECRET=github-webhook-secret:latest'
+      - '--set-env-vars=GCP_PROJECT_ID=$PROJECT_ID,GCP_LOCATION=$_REGION,VERTEX_MODEL=gemini-1.5-pro-001'
+
+substitutions:
+  _REGION: us-central1
+
+options:
+  logging: CLOUD_LOGGING_ONLY
